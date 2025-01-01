@@ -46,20 +46,33 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 				return nil, errors.New("failed to get existing records: " + err.Error())
 			}
 
-			// Look for matching ACME challenge record
-			var found bool
-			var existingRecord libdns.Record
+			// Clean up any stale ACME challenge records for this name
+			var recordsToDelete []libdns.Record
+			var currentRecord *libdns.Record
 			for _, existing := range existingRecords {
 				if existing.Type == record.Type && existing.Name == record.Name {
-					found = true
-					existingRecord = existing
-					break
+					if currentRecord == nil {
+						// Keep the first one we find as current
+						tmp := existing
+						currentRecord = &tmp
+					} else {
+						// Mark any additional ones for deletion
+						recordsToDelete = append(recordsToDelete, existing)
+					}
 				}
 			}
 
-			if found {
-				// Update existing ACME challenge record
-				r, err := UseClient(p.AuthId, p.SubAuthId, p.AuthPassword).UpdateRecord(ctx, zone, existingRecord.ID, record.Name, record.Value, record.TTL)
+			// Delete stale records if any found
+			if len(recordsToDelete) > 0 {
+				_, err = p.DeleteRecords(ctx, zone, recordsToDelete)
+				if err != nil {
+					return nil, errors.New("failed to delete stale ACME challenge records: " + err.Error())
+				}
+			}
+
+			// Update existing record if found
+			if currentRecord != nil {
+				r, err := UseClient(p.AuthId, p.SubAuthId, p.AuthPassword).UpdateRecord(ctx, zone, currentRecord.ID, record.Name, record.Value, record.TTL)
 				if err != nil {
 					return nil, errors.New("failed to update ACME challenge record: " + err.Error())
 				}
@@ -68,7 +81,7 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 			}
 		}
 
-		// Default behavior for non-ACME records or when ACME record doesn't exist
+		// Default behavior for non-ACME records or when no ACME record exists
 		r, err := UseClient(p.AuthId, p.SubAuthId, p.AuthPassword).AddRecord(ctx, zone, record.Type, record.Name, record.Value, record.TTL)
 		if err != nil {
 			return nil, errors.New("failed to add record: " + err.Error())
