@@ -36,7 +36,39 @@ func (p *Provider) AppendRecords(ctx context.Context, zone string, records []lib
 		zone = strings.TrimSuffix(zone, ".")
 	}
 	var createdRecords []libdns.Record
+	
 	for _, record := range records {
+		// Check if this is an ACME challenge record
+		if strings.HasPrefix(record.Name, "_acme-challenge.") {
+			// Get existing records to check if we need to update
+			existingRecords, err := p.GetRecords(ctx, zone)
+			if err != nil {
+				return nil, errors.New("failed to get existing records: " + err.Error())
+			}
+
+			// Look for matching ACME challenge record
+			var found bool
+			var existingRecord libdns.Record
+			for _, existing := range existingRecords {
+				if existing.Type == record.Type && existing.Name == record.Name {
+					found = true
+					existingRecord = existing
+					break
+				}
+			}
+
+			if found {
+				// Update existing ACME challenge record
+				r, err := UseClient(p.AuthId, p.SubAuthId, p.AuthPassword).UpdateRecord(ctx, zone, existingRecord.ID, record.Name, record.Value, record.TTL)
+				if err != nil {
+					return nil, errors.New("failed to update ACME challenge record: " + err.Error())
+				}
+				createdRecords = append(createdRecords, *r)
+				continue
+			}
+		}
+
+		// Default behavior for non-ACME records or when ACME record doesn't exist
 		r, err := UseClient(p.AuthId, p.SubAuthId, p.AuthPassword).AddRecord(ctx, zone, record.Type, record.Name, record.Value, record.TTL)
 		if err != nil {
 			return nil, errors.New("failed to add record: " + err.Error())
